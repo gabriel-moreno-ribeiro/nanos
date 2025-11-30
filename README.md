@@ -1,65 +1,35 @@
 # nanos
 
-A small operating system for 32-bit x86, written from scratch in assembly
-and C. It boots from a raw disk image, drives the screen, keyboard and
-serial port, handles interrupts and exceptions, manages memory, runs
-preemptively scheduled kernel threads, and offers an interactive shell.
-No libraries, no bootloader borrowed from elsewhere: everything from the
-first byte the BIOS loads is in this repository.
+Um sistema operacional pequeno pra x86 de 32 bits, em assembly e C. Dá boot de uma imagem de disco crua, controla tela, teclado e porta serial, trata interrupções e exceções, gerencia memória, roda threads de kernel com escalonamento preemptivo e tem um shell. Nenhuma biblioteca, nenhum bootloader emprestado: do primeiro byte que a BIOS carrega até o prompt, está tudo aqui.
+
+Esse é o último da série e o que eu mais tinha medo. A primeira versão travava antes de imprimir uma letra, e o motivo era ridículo: o `kmain` zerava a seção `.bss`... onde ficava a própria pilha, apagando o endereço de retorno. Achei com o QEMU logando a triple fault. Depois disso foi ladeira abaixo.
 
 ```sh
-make            # needs nasm, gcc, binutils (32-bit target) and qemu-system-i386
-make run        # boot in QEMU with a window; the shell is also on the serial console
-make headless   # serial console only, in the terminal
-make test       # boots the image and drives the shell from a script
+make            # precisa de nasm, gcc, binutils (alvo 32 bits) e qemu-system-i386
+make run        # boot no QEMU com janela; o shell também sai pela serial
+make headless   # só console serial, no terminal
+make test       # dá boot na imagem e dirige o shell com um script
 ```
 
 ## Boot (`boot/boot.asm`)
 
-The BIOS loads the 512-byte boot sector to `0x7C00` in real mode. It reads
-the kernel from the disk with the extended BIOS read service (LBA), enables
-the A20 line, installs a flat GDT, sets `CR0.PE` and far-jumps into 32-bit
-protected mode at the kernel's entry point.
+A BIOS carrega o setor de 512 bytes em `0x7C00` em modo real. Ele lê o kernel do disco com o serviço estendido da BIOS (LBA), liga a linha A20, instala uma GDT plana, seta `CR0.PE` e faz um far jump pro modo protegido de 32 bits no entry point do kernel.
 
 ## Kernel (`kernel/`)
 
-- `entry.asm` — the entry point, 48 interrupt stubs (32 CPU exceptions and
-  16 IRQs) that save the registers and call C, the `context_switch`
-  routine and the trampoline that starts a new thread.
-- `console.c` — VGA text mode with scrolling and a hardware cursor, the
-  16550 serial port, and a `kprintf` that writes to both. QEMU's
-  isa-debug-exit port is used to power off.
-- `idt.c` — the interrupt descriptor table, 8259 PIC remapping and
-  masking, exception reporting (breakpoints and divide errors are
-  survived; anything else panics with the faulting `eip`).
-- `drivers.c` — the programmable interval timer at 100 Hz (which also
-  drives the scheduler) and a PS/2 keyboard driver with shift handling and
-  a ring buffer.
-- `mem.c` — a bitmap allocator for 4 KiB physical frames (2..16 MiB) and a
-  first-fit heap with splitting and coalescing for `kmalloc`/`kfree`.
-- `task.c` — kernel threads: each gets its own stack prepared so that the
-  first context switch "returns" into the trampoline; the timer interrupt
-  calls the round-robin scheduler, so threads are preempted without
-  cooperating; `yield` and `task_exit` are available too.
-- `shell.c` — reads lines from the keyboard or the serial port and runs
-  commands: `help`, `echo`, `mem`, `alloc`, `uptime`, `spawn`, `ps`,
-  `int3`, `div0`, `clear`, `exit`.
-- `kernel.c` — brings everything up in order, runs a memory self-test and
-  starts the shell.
+- `entry.asm`: o entry point (zera a `.bss` antes de qualquer `call`), 48 stubs de interrupção (32 exceções e 16 IRQs) que salvam registradores e chamam C, o `context_switch` e o trampolim que inicia uma thread nova.
+- `console.c`: modo texto VGA com scroll e cursor, a serial 16550, e um `kprintf` que escreve nos dois. A porta isa-debug-exit do QEMU desliga a máquina.
+- `idt.c`: a IDT, remapeamento e máscara dos 8259, relatório de exceções (breakpoint e divisão por zero são sobrevividos; o resto dá panic com o `eip`).
+- `drivers.c`: o PIT a 100 Hz (que também dispara o escalonador) e o teclado PS/2 com shift e ring buffer.
+- `mem.c`: alocador de frames de 4 KiB por bitmap (2 a 16 MiB) e um heap first-fit com divisão e coalescência pra `kmalloc`/`kfree`.
+- `task.c`: threads de kernel, cada uma com a própria pilha preparada pra o primeiro context switch "retornar" no trampolim; a interrupção do timer chama o round-robin, então threads são preemptadas sem cooperar.
+- `shell.c`: lê linhas do teclado ou da serial e roda `help`, `echo`, `mem`, `alloc`, `uptime`, `spawn`, `ps`, `int3`, `div0`, `clear`, `exit`.
+- `kernel.c`: sobe tudo em ordem, roda um self-test de memória e inicia o shell.
 
-The linker script places the kernel at `0x10000` with the entry code
-first; the image is the boot sector followed by the flat kernel binary.
+O linker script coloca o kernel em `0x10000` com o entry primeiro; a imagem é o setor de boot seguido do binário chato do kernel.
 
-## Tests
+Testes: `make test` monta a imagem, dá boot headless no QEMU com a serial num pipe, digita um script no shell e confere o transcrito: banner e self-test, `echo`, contagem de frames antes e depois de `alloc 100`, ticks do timer avançando entre dois `uptime`, duas threads que rodam até o fim enquanto o shell continua respondendo, as exceções de breakpoint e divisão por zero, comando desconhecido e o desligamento limpo (status 1 do QEMU).
 
-`make test` builds the image, boots it headless in QEMU with the serial
-port on a pipe, types a script into the shell and checks the transcript:
-the banner and memory self-test, `echo`, frame accounting before and after
-`alloc 100`, timer ticks that advance between two `uptime` calls, two
-spawned threads that run to completion while the shell keeps working, the
-breakpoint and divide-by-zero exception reports, an unknown command, and a
-clean power-off through the debug exit device (QEMU exit status 1).
+---
 
-## License
-
-MIT
+**EN:** a small 32-bit x86 operating system in assembly and C: a real-mode boot sector that loads the kernel and enters protected mode, VGA and serial console, IDT/PIC with exception handling, PIT and PS/2 keyboard drivers, a frame allocator and a coalescing heap, preemptively scheduled kernel threads, and a shell. `make test` boots it in QEMU and drives the shell over the serial port. MIT.
