@@ -1,5 +1,7 @@
 # nanos
 
+> 🇺🇸 [English version below](#english)
+
 Um sistema operacional pequeno pra x86 de 32 bits, em assembly e C. Dá boot de uma imagem de disco crua, controla tela, teclado e porta serial, trata interrupções e exceções, gerencia memória, roda threads de kernel com escalonamento preemptivo e tem um shell. Nenhuma biblioteca, nenhum bootloader emprestado: do primeiro byte que a BIOS carrega até o prompt, está tudo aqui.
 
 Esse é o último da série e o que eu mais tinha medo. A primeira versão travava antes de imprimir uma letra, e o motivo era ridículo: o `kmain` zerava a seção `.bss`... onde ficava a própria pilha, apagando o endereço de retorno. Achei com o QEMU logando a triple fault. Depois disso foi ladeira abaixo.
@@ -32,4 +34,36 @@ Testes: `make test` monta a imagem, dá boot headless no QEMU com a serial num p
 
 ---
 
-**EN:** a small 32-bit x86 operating system in assembly and C: a real-mode boot sector that loads the kernel and enters protected mode, VGA and serial console, IDT/PIC with exception handling, PIT and PS/2 keyboard drivers, a frame allocator and a coalescing heap, preemptively scheduled kernel threads, and a shell. `make test` boots it in QEMU and drives the shell over the serial port. MIT.
+## English
+
+A small operating system for 32-bit x86, in assembly and C. It boots from a raw disk image, drives the screen, keyboard and serial port, handles interrupts and exceptions, manages memory, runs kernel threads with preemptive scheduling and has a shell. No library, no borrowed bootloader: from the first byte the BIOS loads up to the prompt, it's all here.
+
+This is the last one of the series and the one I was most afraid of. The first version hung before printing a single letter, and the reason was ridiculous: `kmain` zeroed the `.bss` section... where the stack itself lived, wiping the return address. I found it with QEMU logging the triple fault. After that it was downhill.
+
+```sh
+make            # needs nasm, gcc, binutils (32-bit target) and qemu-system-i386
+make run        # boots in QEMU with a window; the shell also comes out over serial
+make headless   # serial console only, in the terminal
+make test       # boots the image and drives the shell with a script
+```
+
+## Boot (`boot/boot.asm`)
+
+The BIOS loads the 512-byte sector at `0x7C00` in real mode. It reads the kernel from disk with the BIOS extended service (LBA), turns on the A20 line, installs a flat GDT, sets `CR0.PE` and does a far jump into 32-bit protected mode at the kernel's entry point.
+
+## Kernel (`kernel/`)
+
+- `entry.asm`: the entry point (zeroes `.bss` before any `call`), 48 interrupt stubs (32 exceptions and 16 IRQs) that save registers and call C, the `context_switch` and the trampoline that starts a new thread.
+- `console.c`: VGA text mode with scrolling and cursor, the 16550 serial port, and a `kprintf` that writes to both. QEMU's isa-debug-exit port powers the machine off.
+- `idt.c`: the IDT, remapping and masking of the 8259s, exception reporting (breakpoint and divide by zero are survived; the rest panics with the `eip`).
+- `drivers.c`: the PIT at 100 Hz (which also fires the scheduler) and the PS/2 keyboard with shift and a ring buffer.
+- `mem.c`: a bitmap allocator of 4 KiB frames (2 to 16 MiB) and a first-fit heap with splitting and coalescing for `kmalloc`/`kfree`.
+- `task.c`: kernel threads, each with its own stack prepared so the first context switch "returns" into the trampoline; the timer interrupt calls the round-robin, so threads are preempted without cooperating.
+- `shell.c`: reads lines from the keyboard or the serial port and runs `help`, `echo`, `mem`, `alloc`, `uptime`, `spawn`, `ps`, `int3`, `div0`, `clear`, `exit`.
+- `kernel.c`: brings everything up in order, runs a memory self-test and starts the shell.
+
+The linker script places the kernel at `0x10000` with the entry first; the image is the boot sector followed by the kernel's flat binary.
+
+Tests: `make test` builds the image, boots it headless in QEMU with the serial port on a pipe, types a script into the shell and checks the transcript: banner and self-test, `echo`, frame count before and after `alloc 100`, timer ticks advancing between two `uptime`s, two threads running to completion while the shell keeps responding, the breakpoint and divide-by-zero exceptions, an unknown command and the clean shutdown (QEMU status 1).
+
+MIT.
